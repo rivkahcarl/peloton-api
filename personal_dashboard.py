@@ -1,10 +1,14 @@
 
 # Imports for dashboard
 import dash
+import dash_table
 import dash_core_components as dcc
 import dash_html_components as html
 import plotly.express as px
 import plotly.graph_objects as go
+
+import psycopg2
+from psycopg2 import Error
 
 # import requests
 # import csv
@@ -50,53 +54,30 @@ external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
-# assume you have a "wide-form" data frame with no index
-# see https://plotly.com/python/wide-form/ for more options
-# df = pd.DataFrame({"x": [1, 2, 3], "SF": [4, 1, 2], "Montreal": [2, 4, 5]})
 
 
-workouts = PelotonWorkout.list()
+connection = psycopg2.connect(user = "rivkahcarl",
+             password = "",
+             host = "127.0.0.1",
+             port = "5432",
+             database = "peloton")
+cursor = connection.cursor()
 
-# Pull out subset of relevant data for dashboard
-## The finalData list is a list of dictionaries to say output to csv if want to chart elsewhere (outside of python)
-finalData = []
+load_data_query = "SELECT * FROM public.workouts"
 
-for workout in workouts:
-	if workout.fitness_discipline != 'meditation':
+df = pd.read_sql(load_data_query, connection)
 
-		# Gather workout.id, workout.fitness_discipline, workout.created_at
-		workoutDict = dict(workoutId=workout.id, fitness_discipline = workout.fitness_discipline, created_at = workout.created_at)
-
-		# Gather Calories
-		# In this library calories are found in the PelotonWorkoutMetrics object
-		# Not all workouts have associated calorie measures
-		if hasattr(workout.metrics, 'calories_summary'): 
-			workoutDict['calories'] = workout.metrics.calories_summary.value if workout.metrics.calories_summary.slug == 'calories' else 0
-		else:
-			print("The following class does not have Calorie object: %s" % workout.id, workout.fitness_discipline)
-			workoutDict['calories'] = 0 ## TODO - Figure out why and which class is missing calories
-
-
-		# Gather Instructors names
-		# Instructor name are found within 'ride.instructor.name' - not all workouts have an associated instructor
-		if hasattr(workout.ride, 'instructor'):
-			workoutDict['instructorName'] = workout.ride.instructor.name
-		else: 
-			print("Workout is missing Instructor information, Id= %s" % workout.id)	
-
-		# Append each dict to a list to get ready for a dataframe
-		finalData.append(workoutDict)
-	else:
-		pass #Dont care for meditation classes at this point in time- mostly concerned about active fitness
-
-
-# Convert to Pandas dataframe
-df = pd.DataFrame(finalData)  
-
-# Task 1: Plot Calories by Day
+# Convert to Pandas dataframe - TODO- It might already be in a df format
+# df = pd.DataFrame(finalData)  
 
 # Create pretty Date column
 df['Date'] = df.apply(lambda row: row.created_at.date(), axis=1)
+
+# Create length of time in minutes
+df['durationMinutes'] = df['durationseconds']/60
+
+
+# Task 1a: Plot Calories by Day
 df2 = df.groupby("Date", as_index=False).calories.sum()
 
 df2['Date'] = pd.to_datetime(df2.Date) #, format='%Y%m%d'
@@ -107,6 +88,7 @@ df3 = df.groupby(["Date", "fitness_discipline"], as_index=False).calories.sum()
 calorieGraph = px.bar(df2, x='Date', y='calories', barmode="group", labels={'calories':'Total Calories'})
 # calorieGraphByFitnessType = px.bar(df2, x='Date', y='calories', barmode="group", labels={'calories':'Total Calories'})
 
+# Task 1a: Plot Calories by Day and Fitness type
 uniquefd = df3['fitness_discipline'].unique()
 
 # calorieGraphByFitnessType = go.Figure()
@@ -134,28 +116,75 @@ df3 = df2[(df2['Year'] == '2020') & (df2['Month'].isin(['March', 'April', 'May',
 average_calorie_per_day_corona = df3['calories'].mean()
 
 # Task 2: Number of classes per instructor
-df4 = df.groupby("instructorName", as_index=True).count()[['workoutId']]
+df4 = df.groupby("instructorname", as_index=True).count()[['workoutid']]
 
 # Reset index so instructorName is a column in dataframe
 df4 = df4.reset_index()
 
-df4 = df4.rename(columns={'workoutId':'CountOfClasses'})
+df4 = df4.rename(columns={'workoutid':'CountOfClasses'})
 df4 = df4.sort_values(by=['CountOfClasses'], ascending=False)
 
-instructorGraph = px.bar(df4, x='CountOfClasses', y='instructorName', barmode="group", labels={'CountOfClasses':'Number of classes', 'instructorName':'Instructor Name'})
+instructorGraph = px.bar(df4, x='CountOfClasses', y='instructorname', barmode="group", labels={'CountOfClasses':'Number of classes', 'instructorname':'Instructor Name'})
 
 #ax = df4.plot(x='instructorName', y='CountOfClasses', kind='barh') #, orientation='horizontal')
 
 # plt.show()
 
+# Task 3a: Number of classes per day 
+
+df5 = df.groupby("Date", as_index=False).workoutid.count()
+
+df5['Date'] = pd.to_datetime(df5.Date) #, format='%Y%m%d'
+workoutsByDateGraph = px.bar(df5, x='Date', y='workoutid', barmode="group", labels={'calories':'Total Calories', 'workoutid':'Number of Classes'})
+
+
+df6 = df.groupby(["Date", "fitness_discipline"], as_index=False).workoutid.count()
+df6['Date'] = pd.to_datetime(df6.Date) #, format='%Y%m%d'
+
+
+# Task 3b: Number of classes per day and fitness type
+uniquefd = df6['fitness_discipline'].unique()
+
+trace_data = []
+for fittype in uniquefd:
+	subbytype = df6[df6["fitness_discipline"] == fittype]
+	trace = go.Bar(name=fittype, x=subbytype['Date'], y=subbytype['workoutid'])
+	trace_data.append(trace)
+
+ftlayout = go.Layout(title="Number of Workouts per Day by Fitness Type", barmode="stack")
+
+numberWorkoutsByDateFitness = go.Figure(trace_data, ftlayout)
+
+# Task 4: Counts based on Lengths of Classes
+
+df7 = df.groupby("durationMinutes", as_index=False).workoutid.count()
+df7 = df7.rename(columns={"durationMinutes": "Length of Class (Minutes)", "workoutid": "Count of Classes"})
+
+# Number of classes per day and length
+df8 = df.groupby(["Date", "durationMinutes"], as_index=False).workoutid.count()
+# df8 = df8.rename(columns={"durationMinutes": "Length of Class (Minutes)", "workoutid": "Count of Classes"})
+
+df8["durationMinutes"] = df8.durationMinutes.apply(lambda x: str(x))
+uniquelth = df8['durationMinutes'].unique()
+
+
+trace_data = []
+for lentype in uniquelth:
+	subbytype = df8[df8["durationMinutes"] == lentype]
+	trace = go.Bar(name=lentype, x=subbytype['Date'], y=subbytype['workoutid'])
+	trace_data.append(trace)
+
+ftlayout = go.Layout(title="Number of Classes per Day by Length", barmode="stack")
+
+numberClassesByLength = go.Figure(trace_data, ftlayout)
+
 
 app.layout = html.Div(children=[
     html.H1(children='Peloton Workouts: Personal Dashboard'),
-
     html.Div(children='''
         Aggregate Data across Peloton workouts to monitor personal progress
     '''),
-    html.H3(children='Total Workouts: %s' % len(workouts)),
+    html.H3(children='Total Workouts: %s' % len(df.index)),
     html.H3(children='Average Calories Per Day Overall, %s' % average_calorie_per_day),    
     html.H3(children='Average Calories Per Day during Corona Months, %s' % average_calorie_per_day_corona),
     dcc.Graph(
@@ -169,9 +198,32 @@ app.layout = html.Div(children=[
     ),
     html.Hr(),
     dcc.Graph(
+    	id='count-workouts-by-date',
+    	figure=workoutsByDateGraph
+    ),    
+    html.Hr(),
+    dcc.Graph(
+    	id='count-workouts-by-date-fitness-type',
+    	figure=numberWorkoutsByDateFitness
+    ),    
+    html.Hr(),
+    dcc.Graph(
     	id='instructor-graph',
-    	figure=instructorGraph)
+    	figure=instructorGraph),
+    html.Hr(),
+    dash_table.DataTable(
+    				id='length-table',
+    				columns=[{"name": i, "id": i} for i in df7.columns],
+    				data=df7.to_dict('records')
+    				),
+    html.Hr(),
+    dcc.Graph(
+    	id='classes-by-length-graph',
+    	figure=numberClassesByLength),
 ])
+
+
+
 
 if __name__ == '__main__':
     app.run_server(debug=True)
