@@ -50,7 +50,7 @@ The following script builds a dashboard with Python's Dash.
 
 '''
 
-external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
+external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css', 'https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css']
 
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
@@ -112,7 +112,7 @@ df2['Month'] = df2['DateName'].str.split(" ", n=1, expand=True)[0]
 df2['Year'] = df2['DateName'].str.split(" ", expand=True)[2]
 average_calorie_per_day = df2['calories'].mean()
 
-df3 = df2[(df2['Year'] == '2020') & (df2['Month'].isin(['March', 'April', 'May', 'June', 'July']))] 
+df3 = df2[(df2['Year'] == '2020') & (df2['Month'].isin(['March', 'April', 'May', 'June', 'July', 'August']))] 
 average_calorie_per_day_corona = df3['calories'].mean()
 
 # Task 2: Number of classes per instructor
@@ -178,6 +178,37 @@ ftlayout = go.Layout(title="Number of Classes per Day by Length", barmode="stack
 
 numberClassesByLength = go.Figure(trace_data, ftlayout)
 
+# Task 5: Miles and distance
+
+df9 = df.groupby("Date", as_index=False).distance_miles.sum()
+average_miles_per_day_total = df9['distance_miles'].mean()
+
+# Number of average miles per day running
+df10 = df.groupby(["Date", "fitness_discipline"], as_index=False).distance_miles.sum()
+
+#subset dataframe for running and walking and group by date, sum across miles
+df11 = df10[df10['fitness_discipline'].isin(['running', 'walking'])].groupby("Date", as_index=False).distance_miles.sum()
+average_miles_per_day_run = df11['distance_miles'].mean()
+
+# Number of average miles per day cycling
+
+df12 = df10[df10['fitness_discipline'].isin(['cycling'])].groupby("Date", as_index=False).distance_miles.sum()
+average_miles_per_day_cycling = df12['distance_miles'].mean()
+
+
+# Chart of miles per day broken down by running and cycling
+df13 = df10[df10['distance_miles']!=0]
+uniquefd = df13['fitness_discipline'].unique()
+
+trace_data = []
+for fittype in uniquefd:
+	subbytype = df13[df13["fitness_discipline"] == fittype]
+	trace = go.Bar(name=fittype, x=subbytype['Date'], y=subbytype['distance_miles'])
+	trace_data.append(trace)
+
+ftlayout = go.Layout(title="Miles (Distance) per Day by Fitness Type", barmode="stack")
+
+milesGraph = go.Figure(trace_data, ftlayout)
 
 app.layout = html.Div(children=[
     html.H1(children='Peloton Workouts: Personal Dashboard'),
@@ -187,6 +218,10 @@ app.layout = html.Div(children=[
     html.H3(children='Total Workouts: %s' % len(df.index)),
     html.H3(children='Average Calories Per Day Overall, %s' % average_calorie_per_day),    
     html.H3(children='Average Calories Per Day during Corona Months, %s' % average_calorie_per_day_corona),
+    # The total average miles per day did not make as much sense without being broken out by fitness type
+    # html.H3(children='Average Miles Per Day Across all fitness types, %s' % average_miles_per_day_total),
+    html.H3(children='Average Miles Ran/Walked Per Day, %s' % average_miles_per_day_run),
+    html.H3(children='Average Miles Biked Per Day, %s' % average_miles_per_day_cycling),
     dcc.Graph(
         id='calorie-graph',
         figure=calorieGraph
@@ -206,6 +241,11 @@ app.layout = html.Div(children=[
     	id='count-workouts-by-date-fitness-type',
     	figure=numberWorkoutsByDateFitness
     ),    
+    html.Hr(),
+    dcc.Graph(
+    	id='miles-graph',
+    	figure=milesGraph
+    	),
     html.Hr(),
     dcc.Graph(
     	id='instructor-graph',
